@@ -121,16 +121,15 @@ ALL_RAW_COLUMNS: List[str] = [
 # Exclude direct label formula inputs and growth rate rules:
 # - estimated_growth_rate (direct driver of future price & label)
 # - Price_per_SqFt (used directly in city price percentile threshold)
-# - infrastructure_score (used directly in infra threshold)
-# - City_Tier (used directly in growth rate calculation)
-# We keep remaining independent property attributes.
+# - infrastructure_score, Public_Transport_Accessibility, school_density_score
+#   (raw linear drivers of the infrastructure threshold)
+# - City_Tier, age_bucket (direct constituents of growth rate)
+# We keep remaining independent property attributes, location, pricing, and building characteristics.
 CLASSIFIER_FEATURE_COLUMNS: List[str] = [
     "State", "City", "Locality", "Property_Type", "BHK", "Size_in_SqFt",
-    "Price_in_Lakhs", "Year_Built", "Furnished_Status", "Floor_No", "Total_Floors",
-    "Age_of_Property", "Nearby_Schools", "Nearby_Hospitals",
-    "Public_Transport_Accessibility", "Parking_Space", "Security",
-    "Facing", "Owner_Type", "Availability_Status", "amenity_count",
-    "security_feature_count", "floor_ratio", "school_density_score", "age_bucket"
+    "Price_in_Lakhs", "Floor_No", "Total_Floors", "Age_of_Property",
+    "Nearby_Schools", "Nearby_Hospitals", "Parking_Space", "Security",
+    "Facing", "Owner_Type", "Availability_Status", "amenity_count", "floor_ratio"
 ]
 
 # Regression Leakage Isolation:

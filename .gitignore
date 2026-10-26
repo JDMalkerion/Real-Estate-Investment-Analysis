@@ -5,6 +5,7 @@ __pycache__/
 *$py.class
 mlruns/
 mlflow.db
+scratch/
 .DS_Store
 
 # Models are committed because Streamlit app needs them
