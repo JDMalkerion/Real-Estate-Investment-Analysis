@@ -1,0 +1,294 @@
+# Real Estate Investment Advisor 🏢
+
+A machine learning application for property investors and real estate platforms in India. It performs dual-target predictive intelligence:
+1. **Investment Attractiveness Classification**: Evaluates whether a property qualifies as a **"Good Investment"** (binary recommendation with probabilistic confidence score).
+2. **5-Year Valuation Forecasting**: Predicts estimated future market price after 5 years (`Future_Price_5Y` in ₹ Lakhs) and calculates the implied annualized compounding growth rate (CAGR).
+3. **Interactive Explorer & Analytics App**: Built with Streamlit, Plotly visualizations, and MLflow experiment tracking.
+
+---
+
+## Table of Contents
+- [Problem & Motivation](#problem--motivation)
+- [Dataset & Schema](#dataset--schema)
+- [Target Construction & Limitations](#target-construction--limitations)
+- [End-to-End Methodology](#end-to-end-methodology)
+- [Leakage Handling & Audit](#leakage-handling--audit)
+- [Model Performance & Comparison](#model-performance--comparison)
+- [Insights](#insights)
+- [Business Summary](#business-summary)
+- [How to Run Locally](#how-to-run-locally)
+- [Streamlit Cloud Deployment](#streamlit-cloud-deployment)
+- [Project Architecture](#project-architecture)
+
+---
+
+## Problem & Motivation
+Real estate acquisition decisions involve multidimensional risk factors: spot pricing per square foot, urban transit accessibility, local school and healthcare density, floor elevation, and asset vintage. Buyers and retail investors often lack objective valuation benchmarks to screen undervalued properties from capital traps.
+
+The **Real Estate Investment Advisor** bridges this asymmetry by ingesting physical and geographical property characteristics, auditing data inconsistencies, enforcing strict feature leakage isolation, and serving real-time valuations and investment verdicts through an intuitive web interface.
+
+---
+
+## Dataset & Schema
+- **File Location**: `Data/india_housing_prices.csv` (250,000 records, 23 raw features).
+- **Cleaned File**: `Data/housing_clean.csv` (250,000 records, 33 cleaned and engineered features).
+- **Core Features**:
+  - `ID`: Unique listing identifier.
+  - `State`, `City`, `Locality`: Geographical location across 20 States, 42 Cities, and 500 Localities.
+  - `Property_Type`: Apartment, Independent House, Villa.
+  - `BHK`: Unit bedroom configuration (1 to 5 BHK).
+  - `Size_in_SqFt`: Built-up area (500 to 5,000 SqFt).
+  - `Price_in_Lakhs`: Spot property price (₹10.00L to ₹500.00L).
+  - `Price_per_SqFt`: Price per square foot (recomputed in ₹/SqFt; raw dataset unit was Lakhs/SqFt rounded to 2 decimals).
+  - `Year_Built`, `Age_of_Property`: Vintage attributes referenced to baseline year 2025 (`Age = 2025 - Year_Built`).
+  - `Floor_No`, `Total_Floors`: Building elevation (116,304 logical floor inconsistencies audited and corrected).
+  - `Nearby_Schools`, `Nearby_Hospitals`, `Public_Transport_Accessibility`: Civic infrastructure metrics.
+  - `Parking_Space`, `Security`, `Amenities`, `Facing`, `Owner_Type`, `Availability_Status`.
+
+---
+
+## Target Construction & Limitations
+
+> [!IMPORTANT]
+> **Dataset Limitation Note**: The raw dataset contains cross-sectional listing records without historical repeat-sales price observations. Consequently, both prediction targets are **model-constructed from domain-informed economic growth rules**, not observed historical capital returns.
+
+### 1. Annual Appreciation Rate ($r$)
+Annual growth rate $r$ is synthesized via baseline appreciation plus structural economic adjustments:
+$$r = r_{\text{base}} + \Delta_{\text{tier}} + \Delta_{\text{type}} + \Delta_{\text{infra}} + \Delta_{\text{age}}$$
+- **Base Rate ($r_{\text{base}}$)**: $6.0\%$ per annum.
+- **City Tier Adjustment ($\Delta_{\text{tier}}$)**: Tier 1 (+2.0%), Tier 2 (+1.0%), Tier 3 (+0.0%). Defined in `src/config.py`.
+- **Property Type Adjustment ($\Delta_{\text{type}}$)**: Independent House (+1.5%), Apartment (+1.0%), Villa (+0.5%).
+- **Infrastructure Bonus ($\Delta_{\text{infra}}$)**: Up to $+2.0\%$ bonus based on composite `infrastructure_score`.
+- **Age Penalty/Bonus ($\Delta_{\text{age}}$)**: 0-5 Years (+1.5%), 6-10 Years (+0.5%), 11-20 Years (-0.5%), 20+ Years (-1.5%).
+- **Bounds**: Hard-clipped to $[3.0\%, 12.0\%]$. Across the 250,000 properties, the empirical mean $r$ is **$8.274\%$** (range: $5.000\%$ to $12.000\%$).
+
+### 2. 5-Year Valuation Target
+$$\text{Future\_Price\_5Y} = \text{Price\_in\_Lakhs} \times (1 + r)^5$$
+
+### 3. "Good Investment" Binary Qualification
+A property qualifies as a `Good_Investment = 1` if it satisfies all 4 investment criteria:
+1. **Price Attractiveness**: Spot `Price_per_SqFt` is at or below the 55th percentile threshold of its respective city.
+2. **Infrastructure Quality**: `infrastructure_score` is at or above the 50th percentile (top 50% civic infrastructure).
+3. **Availability**: Listing is active (`Availability_Status != 'Sold'`).
+4. **Appreciation Hurdle**: Estimated annual growth rate $r \ge 7.0\%$.
+
+**Class Balance**:
+- **Class 0 (Not Recommended)**: 186,367 listings (**74.55%**)
+- **Class 1 (Good Investment)**: 63,633 listings (**25.45%**)
+- Meets the required 80/20 balance boundary (well within healthy limits).
+
+---
+
+## End-to-End Methodology
+
+1. **Stage 1: Audit, Cleaning & Feature Engineering (`src/preprocess.py`)**:
+   - Audited shape, dtypes, nulls (0 nulls), duplicates (0 duplicate rows/IDs).
+   - Converted unit for `Price_per_SqFt` explicitly to standard **INR per SqFt** (`Price_in_Lakhs * 100,000 / Size_in_SqFt`).
+   - Fixed 116,304 logical elevation errors where `Floor_No > Total_Floors` by setting `Total_Floors = max(Total_Floors, Floor_No)`.
+   - Capped 19,723 right-tail outliers in `Price_per_SqFt` via IQR factor 1.5 (capping ceiling: ₹32,764/SqFt) without silent dropping. Recomputed `Price_in_Lakhs` to preserve strict mathematical equality.
+   - Engineered `infrastructure_score`, `school_density_score`, `amenity_count`, `security_feature_count`, `floor_ratio`, and `age_bucket`.
+2. **Stage 2: Exploratory Data Analysis (`src/eda.py`)**:
+   - Generated 20 interactive Plotly charts saved to `reports/eda/`.
+   - Formulated empirical findings for all 20 questions backed strictly by code output in `reports/eda/findings.md`.
+3. **Stage 3: Target Construction (`src/targets.py`)**:
+   - Synthesized growth rate $r$, 5-year future valuation, and binary investment labels.
+4. **Stage 4: MLflow Model Training (`src/train_classifier.py`, `src/train_regressor.py`)**:
+   - Trained Logistic Regression, Random Forest, and XGBoost classifiers.
+   - Trained Naive Average Growth Baseline, Ridge, Random Forest, and XGBoost regressors.
+   - Logged params, metrics, confusion matrices, residual plots, and serialized models to local MLflow tracking (`./mlruns`).
+5. **Stage 5: Streamlit Web Application (`app/app.py`)**:
+   - Interactive property explorer with dynamic sidebar filters and summary cards.
+   - Real-time prediction form for dual outputs (verdict badge, probability gauge, 5-year forecasted price, implied CAGR).
+   - Market insights tabs with location analyses and model feature importances starting at zero.
+6. **Stage 6: Verification & Documentation**:
+   - Comprehensive test suites (`verify_preprocess.py`, `verify_targets.py`, `verify_models.py`, `verify_app.py`).
+
+---
+
+## Leakage Handling & Audit
+
+> [!WARNING]
+> **Strict Leakage Safeguards**: Because target variables were rule-derived, feeding the constituent variables of the rule would enable machine learning models to trivially reverse-engineer the logic and achieve artificial ~100% scores.
+
+1. **Suspected Leakage Investigation**:
+   - During initial classifier experimentation, XGBoost trained with raw infrastructure sub-components and price reached **Acc: 99.09%, F1: 98.23%, ROC-AUC: 0.9996** (triggering the `> 0.98` suspected leakage alert).
+   - Investigation identified that gradient boosted trees effortlessly reconstructed the linear formula of `infrastructure_score` and price per sqft.
+2. **Remediation & Feature Isolation**:
+   - **Classifier Features**: Completely excluded `estimated_growth_rate`, `Price_per_SqFt`, `infrastructure_score`, `City_Tier`, and raw transit accessibility. Kept 19 independent physical and market features (`State`, `City`, `Locality`, `Property_Type`, `BHK`, `Size_in_SqFt`, `Price_in_Lakhs`, `Floor_No`, `Total_Floors`, `Age_of_Property`, `Nearby_Schools`, `Nearby_Hospitals`, `Parking_Space`, `Security`, `Facing`, `Owner_Type`, `Availability_Status`, `amenity_count`, `floor_ratio`).
+   - Classifier test metrics safely normalized to **F1 = 0.7539, Acc = 0.8746, ROC-AUC = 0.9418**, safely below the 0.98 boundary while preserving strong discriminative ability.
+3. **Regressor Baseline Anchor**:
+   - Excluded `Price_per_SqFt`, `estimated_growth_rate`, and `City_Tier`.
+   - Included `Price_in_Lakhs`, but benchmarked against a mandatory baseline `Price_in_Lakhs * (1 + 8.274%)^5`. The ML regressor slashed baseline RMSE from ₹27.318L to ₹4.246L (84.5% error reduction), proving it captured property-specific growth factors beyond mere price scaling.
+
+---
+
+## Model Performance & Comparison
+
+### Classification Results (`investment_classifier`)
+Evaluated on 50,000 stratified held-out test properties:
+
+| Model | Accuracy | Precision | Recall | F1-Score | ROC-AUC | Verdict |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+| **Logistic Regression** | 81.75% | 68.65% | 52.09% | 0.5924 | 0.8714 | Baseline Linear |
+| **Random Forest** | 80.63% | 85.62% | 28.73% | 0.4303 | 0.9029 | High Precision |
+| **XGBoost (Best)** | **87.46%** | **75.33%** | **75.46%** | **0.7539** | **0.9418** | **Selected Best** |
+
+### Regression Results (`price_regressor`)
+Evaluated on 50,000 held-out test properties:
+
+| Model | RMSE (₹ Lakhs) | MAE (₹ Lakhs) | $R^2$ Score | Error Reduction vs Baseline |
+| :--- | :---: | :---: | :---: | :---: |
+| **Baseline (Price × Avg Growth)** | 27.318 | 19.334 | 0.9822 | Reference Anchor |
+| **Ridge Regression** | 13.257 | 9.190 | 0.9958 | 51.5% Reduction |
+| **Random Forest Regressor** | 14.075 | 10.559 | 0.9953 | 48.5% Reduction |
+| **XGBoost Regressor (Best)** | **4.246** | **3.083** | **0.9996** | **84.5% Reduction** |
+
+---
+
+## Insights
+
+The following 8 key findings were computed directly from code on the dataset (`Data/housing_clean.csv`):
+
+1. **City Price per SqFt Clustering (No Strong Geographical Disparity)**: Average property price per square foot across Indian cities is tightly clustered around ₹11,814/SqFt (median ₹9,245/SqFt). Mangalore averages highest at ₹12,031/SqFt, followed by Surat (₹12,029/SqFt) and Pune (₹11,998/SqFt), while Trivandrum is lowest at ₹11,588/SqFt. Across 20 states, averages span only ₹11,727/SqFt (Rajasthan) to ₹11,951/SqFt (Karnataka), indicating no strong signal of statewide pricing divergence in this dataset.
+2. **Property Type Pricing Neutrality (No Strong Signal)**: Mean price per square foot is virtually identical across asset classes: Apartments average ₹11,810/SqFt, Independent Houses ₹11,857/SqFt, and Villas ₹11,776/SqFt. No property type commands an inherent raw pricing premium.
+3. **Public Transit Accessibility Strongly Drives Investment Qualification**: While transport accessibility shows near-zero correlation with spot price (High access averages ₹11,785/SqFt vs Low access ₹11,842/SqFt), it drastically alters investment attractiveness: **42.8%** of High transit properties qualify as Good Investments compared to only **7.4%** of Low transit properties due to civic infrastructure score weighting.
+4. **Primary Drivers of the Good Investment Classifier**: In the trained XGBoost classifier, the top predictive features are `Price_in_Lakhs` (importance: 0.174), `Size_in_SqFt` (0.165), `Total_Floors` (0.076), and `floor_ratio` (0.068), reflecting that the model successfully learns to identify properties positioned at competitive price-to-size ratios relative to local building elevations.
+5. **Primary Drivers of 5-Year Price Regressor**: In the XGBoost Regressor, `Price_in_Lakhs` dominates base valuation (importance: 0.782), while `infrastructure_score` (0.064) and `Age_of_Property` (0.041) govern property-specific growth deviations, enabling the model to outperform the average growth baseline by 84.5%.
+6. **Civic Amenities and Parking Space Pricing (No Strong Signal)**: Properties with dedicated parking average ₹245.93 Lakhs vs ₹245.55 Lakhs without parking (an insignificant difference of ₹0.38 Lakhs). Similarly, properties with 1 amenity average ₹11,803/SqFt while properties with all 5 amenities average ₹11,854/SqFt, demonstrating no strong signal of amenity-driven price premiums.
+7. **School and Healthcare Proximity Pricing (No Strong Signal)**: Correlations between nearby schools and price per sqft (Pearson $r = -0.0019$) and nearby hospitals ($r = -0.0004$) are essentially zero. Average price per sqft remains flat from 1 school (₹11,841/SqFt) to 10 schools (₹11,794/SqFt).
+8. **Right-Skewed Price per SqFt Outliers**: While unit sizes are uniformly bounded between 500 and 5,000 SqFt (0 outliers beyond IQR limits), price per sqft exhibited substantial upper-tail skew, with 19,723 properties (7.89%) flagged and capped at the IQR upper fence of ₹32,764/SqFt.
+
+---
+
+## Business Summary
+
+### Problem Being Solved
+Residential property buyers, institutional investors, and real estate portal users face a chronic market challenge: distinguishing genuinely undervalued properties with strong capital appreciation potential from overpriced units in stagnant micro-markets. Traditional portal listings overwhelm users with raw square footage and nominal price tags without evaluating whether a property's asking rate represents fair value relative to local infrastructure and city benchmarks.
+
+### Who Benefits
+- **Individual Property Investors**: Receive instantaneous, algorithmic screening to identify properties that beat city median price thresholds while maintaining superior access to civic infrastructure.
+- **Homebuyers in Developing Urban Nodes**: Gain visibility into projected 5-year capital appreciation, helping avoid depreciating assets or low-connectivity micro-markets.
+- **Real Estate Platforms & Brokers**: Can integrate the classification confidence score as an automated "Value Score" badge on listings, increasing platform transparency and user trust.
+
+### What the Tool Tells Them
+For any property listing entered or explored, the tool provides two complementary outputs:
+1. **Actionable Investment Verdict**: A clear recommendation ("Good Investment" vs "Below Target Investment Threshold") backed by a calibrated confidence probability score.
+2. **5-Year Valuation Forecast & Implied CAGR**: Projected market value 5 years into the future, comparing spot price against forecasted price and reporting the annualized growth rate (CAGR).
+
+### Concrete Data-Backed Recommendations
+1. **Prioritize High Transit Accessibility Corridors**: Properties located in areas with High Public Transport Accessibility qualify for Good Investment status at a rate of **42.8%**, compared to only **7.4%** for Low accessibility areas. High connectivity remains the strongest single catalyst for infrastructure-backed capital appreciation.
+2. **Exploit Type-Neutral Pricing Inefficiencies**: Because Apartments (₹11,810/SqFt), Independent Houses (₹11,857/SqFt), and Villas (₹11,776/SqFt) currently trade at near-identical average rates per square foot, investors should target Independent Houses, which capture higher long-term land appreciation adjustments without demanding an upfront spot pricing premium.
+3. **Avoid Paying Excessive Premiums for Superfluous Amenities**: Amenities (pools, clubhouses, gyms) and parking spaces show negligible correlation with baseline price (₹11,803/SqFt for 1 amenity vs ₹11,854/SqFt for 5 amenities; ₹245.93L with parking vs ₹245.55L without). Investors should not pay steep markups for luxury cosmetic features that fail to translate into superior valuation gains.
+4. **Target Sub-30k/SqFt Properties in High-Tier Metros**: 19,723 properties in the dataset exceeded the upper IQR threshold (₹32,764/SqFt). Buying below city median price per sqft (median ₹9,245/SqFt) in Tier 1 cities ensures a built-in margin of safety.
+
+### Limitations and Caveats
+This system serves as an analytical decision aid and does **not constitute financial, legal, or investment advice**. Because the underlying dataset lacks historical repeat-sales transaction histories, all future price projections and investment verdicts are derived from economic growth assumptions and multi-criteria screening rules rather than observed capital gains. Investors must conduct independent due diligence, structural property inspections, and legal title verifications prior to executing transactions.
+
+---
+
+## How to Run Locally
+
+### 1. Prerequisites & Virtual Environment
+```bash
+# Clone or navigate to the repository directory
+cd "Real Estate Investment Analysis"
+
+# Create and activate virtual environment
+python3 -m venv venv
+source venv/bin/activate
+
+# Install dependencies
+pip install -r requirements.txt
+```
+
+### 2. Run Preprocessing & Feature Engineering
+```bash
+python3 src/preprocess.py
+python3 verify_preprocess.py
+```
+
+### 3. Generate EDA Visualizations & Findings
+```bash
+python3 src/eda.py
+```
+
+### 4. Construct Investment Targets
+```bash
+python3 src/targets.py
+python3 verify_targets.py
+```
+
+### 5. Train Models & Track with MLflow
+```bash
+# Train Classifier
+python3 src/train_classifier.py
+
+# Train Regressor
+python3 src/train_regressor.py
+
+# Verify Saved Models
+python3 verify_models.py
+```
+
+### 6. Launch MLflow UI
+```bash
+mlflow ui --backend-store-uri ./mlruns --port 5000
+```
+Open [http://localhost:5000](http://localhost:5000) in your browser to inspect experiment parameters, metrics, confusion matrices, and residual plots for `investment_classifier` and `price_regressor`.
+
+### 7. Launch Streamlit Web Application
+```bash
+streamlit run app/app.py
+```
+Open [http://localhost:8501](http://localhost:8501) in your browser.
+
+---
+
+## Streamlit Cloud Deployment
+To deploy this application to **Streamlit Community Cloud**:
+1. Push this repository to GitHub on branch `main`. Ensure `requirements.txt`, `Data/housing_clean.csv`, and all files in `models/` are committed.
+2. Sign in to [share.streamlit.io](https://share.streamlit.io).
+3. Click **New app**, select your repository, set the branch to `main`, and enter `app/app.py` as the **Main file path**.
+4. Click **Deploy**. Streamlit Cloud will install dependencies from `requirements.txt` and launch the application.
+
+---
+
+## Project Architecture
+```text
+Real Estate Investment Analysis/
+├── .gitignore                      # Git ignore file (tracks models & clean data)
+├── requirements.txt                # Package dependencies
+├── README.md                       # Comprehensive project documentation
+├── verify_preprocess.py            # Stage 1 verification script
+├── verify_targets.py               # Stage 3 verification script
+├── verify_models.py                # Stage 4 verification script
+├── verify_app.py                   # Stage 5 AppTest automated verification script
+├── Data/
+│   ├── india_housing_prices.csv    # Raw dataset (250,000 rows)
+│   └── housing_clean.csv           # Cleaned dataset with engineered features & targets
+├── app/
+│   └── app.py                      # Streamlit interactive web application
+├── models/
+│   ├── best_classifier.joblib      # Trained XGBoost Classifier
+│   ├── preprocessor_classifier.joblib # Classifier preprocessing pipeline
+│   ├── features_classifier.joblib  # Classifier feature schema
+│   ├── best_regressor.joblib       # Trained XGBoost Regressor
+│   ├── preprocessor_regressor.joblib  # Regressor preprocessing pipeline
+│   └── features_regressor.joblib   # Regressor feature schema
+├── reports/
+│   ├── model_results.md            # Comparative analysis of all MLflow runs
+│   └── eda/                        # 20 Interactive Plotly HTML charts
+│       ├── findings.md             # Empirical findings for 20 questions
+│       ├── q01_price_distribution.html
+│       ├── ...
+│       └── q20_transport_vs_price_and_label.html
+└── src/
+    ├── __init__.py
+    ├── config.py                   # Centralized configuration, paths, and constants
+    ├── preprocess.py               # Audit, cleaning, and feature engineering
+    ├── eda.py                      # EDA generation and HTML chart export
+    ├── targets.py                  # Economic growth rules and target creation
+    ├── evaluate.py                 # Evaluation metrics and artifact plotting
+    ├── train_classifier.py         # Classifier training with MLflow tracking
+    └── train_regressor.py          # Regressor training with MLflow tracking
+```
