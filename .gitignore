@@ -1,0 +1,15 @@
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+mlruns/
+mlflow.db
+.DS_Store
+
+# Models are committed because Streamlit app needs them
+!models/*.joblib
+
+# Data files needed for Streamlit Cloud
+!Data/india_housing_prices.csv
+!Data/housing_clean.csv
