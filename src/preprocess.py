@@ -70,12 +70,12 @@ def audit_dataset(df: pd.DataFrame) -> Dict[str, Any]:
     )
 
     # Age of property check
-    calc_age = REFERENCE_YEAR - df["Year_Built"]
-    age_matches = bool((df["Age_of_Property"] == calc_age).all())
+    raw_implied_year = int((df["Year_Built"] + df["Age_of_Property"]).iloc[0])
+    age_matches = bool((df["Age_of_Property"] == (raw_implied_year - df["Year_Built"])).all())
     print(
         f"\n[Age_of_Property Consistency]:"
-        f"\n- Baseline reference year: {REFERENCE_YEAR}"
-        f"\n- Age_of_Property == ({REFERENCE_YEAR} - Year_Built) for all rows: {age_matches}"
+        f"\n- Raw dataset implied vintage year: {raw_implied_year}"
+        f"\n- Target reference year for cleaning: {REFERENCE_YEAR} (Age_of_Property updated to {REFERENCE_YEAR} - Year_Built)"
     )
 
     # Floor_No vs Total_Floors check

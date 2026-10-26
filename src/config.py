@@ -38,7 +38,7 @@ EXPERIMENT_CLASSIFIER: str = "investment_classifier"
 EXPERIMENT_REGRESSOR: str = "price_regressor"
 
 # Preprocessing & Units
-REFERENCE_YEAR: int = 2025
+REFERENCE_YEAR: int = 2026
 INR_PER_LAKH: float = 100000.0
 IQR_FACTOR: float = 1.5
 

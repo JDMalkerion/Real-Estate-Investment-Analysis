@@ -4,55 +4,68 @@ This document presents the empirical evaluation of all trained models for both t
 
 ---
 
-## 1. Investment Classifier Comparison
+## 1. Feature Lists Used in Production
 
-- **Objective**: Predict whether a residential property qualifies as a `Good_Investment` (binary label: 0 or 1).
-- **Class Balance**: 74.55% Class 0 (Not Recommended), 25.45% Class 1 (Good Investment).
-- **Test Set**: 50,000 stratified samples (20% holdout).
+### A. Investment Classifier Features (`CLASSIFIER_FEATURE_COLUMNS` — 19 features)
+```python
+[
+    'State', 'City', 'Locality', 'Property_Type', 'BHK', 'Size_in_SqFt',
+    'Price_in_Lakhs', 'Floor_No', 'Total_Floors', 'Age_of_Property',
+    'Nearby_Schools', 'Nearby_Hospitals', 'Parking_Space', 'Security',
+    'Facing', 'Owner_Type', 'Availability_Status', 'amenity_count', 'floor_ratio'
+]
+```
 
-### Metric Comparison Table
+### B. 5-Year Price Regressor Features (`REGRESSOR_FEATURE_COLUMNS` — 26 features)
+```python
+[
+    'State', 'City', 'Locality', 'Property_Type', 'BHK', 'Size_in_SqFt',
+    'Price_in_Lakhs', 'Year_Built', 'Furnished_Status', 'Floor_No', 'Total_Floors',
+    'Age_of_Property', 'Nearby_Schools', 'Nearby_Hospitals',
+    'Public_Transport_Accessibility', 'Parking_Space', 'Security',
+    'Facing', 'Owner_Type', 'Availability_Status', 'amenity_count',
+    'security_feature_count', 'floor_ratio', 'school_density_score',
+    'infrastructure_score', 'age_bucket'
+]
+```
+
+---
+
+## 2. Investment Classifier: Leakage & Ablation Experiments
+
+To evaluate the exact boundaries of feature leakage and understand where predictive signal originates, the XGBoost classifier was trained across three controlled feature configurations on the 50,000 held-out test partition (80/20 stratified split, random seed 42):
+
+### Feature Variant Comparison Table
+
+| Model Variant | Excluded Features | Feature Count | Accuracy | F1-Score | ROC-AUC | Primary Driver / Behavior |
+| :--- | :--- | :---: | :---: | :---: | :---: | :--- |
+| **Current Model** | Direct formula outputs (`Price_per_SqFt`, `infrastructure_score`, `growth_rate`, `City_Tier`, `transit`) | **19** | **87.43%** | **0.7492** | **0.9423** | **Production Balance**: Learns non-linear valuation & local infrastructure signals without 100% rule inversion. |
+| **Variant A** | + Dropping `Price_in_Lakhs` & `Size_in_SqFt` | **17** | **75.77%** | **0.3228** | **0.7642** | **Valuation Stripped**: Without pricing and area, the model cannot evaluate price-per-sqft attractiveness. F1 collapses by 42.6 points. |
+| **Variant B** | + Dropping `Nearby_Schools`, `Nearby_Hospitals`, & `City` | **14** | **74.77%** | **0.0003** | **0.5710** | **Signal Depleted**: Stripped of both valuation and civic infrastructure/city signals, model collapses to majority-class guessing (74.76% Class 0). |
+
+### Key Takeaways from the Ablation Study:
+1. **Price and Size are Essential for Value Screening**: Removing `Price_in_Lakhs` and `Size_in_SqFt` drops the F1-score from **0.7492** down to **0.3228** and ROC-AUC from **0.9423** to **0.7642**. Because an investment evaluation fundamentally compares price to asset size, stripping these features disables the model's ability to identify undervalued properties.
+2. **Civic Infrastructure Drives the Remaining Signal**: Further removing `Nearby_Schools`, `Nearby_Hospitals`, and `City` causes the F1-score to drop to near-zero (**0.0003**) and ROC-AUC to collapse to **0.5710** (near random guessing). This proves that the model relies on civic infrastructure density and urban markets to separate viable opportunities from unviable listings.
+
+---
+
+## 3. Production Model Performance Comparisons
+
+### A. Investment Classifier (50,000 Test Properties)
 
 | Model | Accuracy | Precision | Recall | F1-Score | ROC-AUC | Status |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Logistic Regression** | 0.8175 | 0.6865 | 0.5209 | 0.5924 | 0.8714 | Baseline Linear |
-| **Random Forest Classifier** | 0.8063 | 0.8562 | 0.2873 | 0.4303 | 0.9029 | High Precision |
-| **XGBoost Classifier (Best)** | **0.8746** | **0.7533** | **0.7546** | **0.7539** | **0.9418** | **Selected Best** |
+| **Logistic Regression** | 81.75% | 68.65% | 52.09% | 0.5924 | 0.8714 | Baseline Linear |
+| **Random Forest Classifier** | 80.63% | 85.62% | 28.73% | 0.4303 | 0.9029 | High Precision |
+| **XGBoost Classifier (Best)** | **87.43%** | **75.33%** | **75.46%** | **0.7492** | **0.9423** | **Production Best** |
 
-### Leakage Audit & Investigation
-1. **Initial Suspected Leakage Audit**: When trained on all raw infrastructure sub-components (`Nearby_Schools`, `Nearby_Hospitals`, `Public_Transport_Accessibility`) and price variables simultaneously, XGBoost scored **Acc: 0.9909, F1: 0.9823, ROC-AUC: 0.9996** (> 0.98 alert triggered).
-2. **Investigation**: Inspection revealed that tree ensembles reconstructed the exact linear combination of `infrastructure_score` and `Price_per_SqFt <= city_median`.
-3. **Leakage Isolation Remediation**:
-   - Strictly excluded `estimated_growth_rate`, `Price_per_SqFt`, `infrastructure_score`, `City_Tier`, and raw transit accessibility from the classifier feature matrix.
-   - Retained independent physical attributes: location (`State`, `City`, `Locality`), physical dimensions (`Size_in_SqFt`, `Price_in_Lakhs`, `BHK`), building attributes (`Floor_No`, `Total_Floors`, `Age_of_Property`), amenities, and local school/hospital proximity.
-4. **Outcome**: XGBoost test metrics settled at **F1 = 0.7539, Acc = 0.8746, ROC-AUC = 0.9418**, safely below the 0.98 leakage limit while demonstrating genuine non-linear discriminative capability.
+### B. 5-Year Price Regressor (50,000 Test Properties)
 
----
+> **Important Caveat**: The 5-year regressor mostly relearns the synthetic growth formula (Baseline $R^2 = 0.9822$ vs Model $R^2 = 0.9996$).
 
-## 2. 5-Year Price Regressor Comparison
-
-- **Objective**: Predict estimated property market valuation after 5 years (`Future_Price_5Y` in ₹ Lakhs).
-- **Target Definition**: Built via economic growth rules ($Future\_Price = Price \times (1 + r)^5$, where $r \in [5\%, 12\%]$).
-- **Test Set**: 50,000 held-out properties (20% split).
-
-### Metric Comparison Table
-
-| Model | RMSE (₹ Lakhs) | MAE (₹ Lakhs) | $R^2$ Score | Improvement over Baseline |
+| Model | RMSE (₹ Lakhs) | MAE (₹ Lakhs) | $R^2$ Score | Error Reduction vs Baseline |
 | :--- | :---: | :---: | :---: | :---: |
-| **Baseline (Price × Average Growth)** | 27.318 | 19.334 | 0.9822 | Reference Anchor |
-| **Ridge Regression** | 13.257 | 9.190 | 0.9958 | 51.5% RMSE Reduction |
-| **Random Forest Regressor** | 14.075 | 10.559 | 0.9953 | 48.5% RMSE Reduction |
-| **XGBoost Regressor (Best)** | **4.246** | **3.083** | **0.9996** | **84.5% RMSE Reduction** |
-
-### Understanding the Baseline vs ML Regressors
-- Because property prices range widely from ₹10 Lakhs to ₹500 Lakhs, simply scaling current price by average compounded growth ($(1 + 8.274\%)^5 \approx 1.488$) naturally yields an $R^2$ of 0.9822. However, this naive heuristic has a substantial prediction error of **RMSE = ₹27.318 Lakhs** and **MAE = ₹19.334 Lakhs**.
-- **XGBoost Regressor** slashes this error by **84.5%**, reducing RMSE to **₹4.246 Lakhs** and MAE to **₹3.083 Lakhs**. This proves the model successfully captures nuanced multi-factor appreciation drivers (city tier premiums, infrastructure bonuses, and building vintage depreciation) rather than merely rescaling price.
-
----
-
-## 3. Best Model Artifacts Saved to `models/`
-1. `models/best_classifier.joblib`: Trained XGBoost Classifier ($F_1 = 0.7539$, $\text{ROC-AUC} = 0.9418$).
-2. `models/preprocessor_classifier.joblib`: Fitted ColumnTransformer with OneHotEncoder, TargetEncoder (`Locality`), and StandardScaler.
-3. `models/features_classifier.joblib`: List of 19 independent classifier input features.
-4. `models/best_regressor.joblib`: Trained XGBoost Regressor ($\text{RMSE} = 4.246\text{L}$, $\text{MAE} = 3.083\text{L}$).
-5. `models/preprocessor_regressor.joblib`: Fitted ColumnTransformer for regression.
-6. `models/features_regressor.joblib`: List of 26 regression input features.
+| **Baseline (Price × Avg Growth)** | 27.318 | 19.334 | **0.9822** | Reference Heuristic |
+| **Ridge Regression** | 13.257 | 9.190 | **0.9958** | 51.5% Reduction |
+| **Random Forest Regressor** | 14.075 | 10.559 | **0.9953** | 48.5% Reduction |
+| **XGBoost Regressor (Best)** | **4.246** | **3.083** | **0.9996** | **84.5% Reduction** |

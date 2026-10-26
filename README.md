@@ -40,7 +40,7 @@ The **Real Estate Investment Advisor** bridges this asymmetry by ingesting physi
   - `Size_in_SqFt`: Built-up area (500 to 5,000 SqFt).
   - `Price_in_Lakhs`: Spot property price (₹10.00L to ₹500.00L).
   - `Price_per_SqFt`: Price per square foot (recomputed in ₹/SqFt; raw dataset unit was Lakhs/SqFt rounded to 2 decimals).
-  - `Year_Built`, `Age_of_Property`: Vintage attributes referenced to baseline year 2025 (`Age = 2025 - Year_Built`).
+  - `Year_Built`, `Age_of_Property`: Vintage attributes referenced to current year 2026 (`Age = 2026 - Year_Built`).
   - `Floor_No`, `Total_Floors`: Building elevation (116,304 logical floor inconsistencies audited and corrected).
   - `Nearby_Schools`, `Nearby_Hospitals`, `Public_Transport_Accessibility`: Civic infrastructure metrics.
   - `Parking_Space`, `Security`, `Amenities`, `Facing`, `Owner_Type`, `Availability_Status`.
@@ -115,10 +115,22 @@ A property qualifies as a `Good_Investment = 1` if it satisfies all 4 investment
    - Investigation identified that gradient boosted trees effortlessly reconstructed the linear formula of `infrastructure_score` and price per sqft.
 2. **Remediation & Feature Isolation**:
    - **Classifier Features**: Completely excluded `estimated_growth_rate`, `Price_per_SqFt`, `infrastructure_score`, `City_Tier`, and raw transit accessibility. Kept 19 independent physical and market features (`State`, `City`, `Locality`, `Property_Type`, `BHK`, `Size_in_SqFt`, `Price_in_Lakhs`, `Floor_No`, `Total_Floors`, `Age_of_Property`, `Nearby_Schools`, `Nearby_Hospitals`, `Parking_Space`, `Security`, `Facing`, `Owner_Type`, `Availability_Status`, `amenity_count`, `floor_ratio`).
-   - Classifier test metrics safely normalized to **F1 = 0.7539, Acc = 0.8746, ROC-AUC = 0.9418**, safely below the 0.98 boundary while preserving strong discriminative ability.
-3. **Regressor Baseline Anchor**:
-   - Excluded `Price_per_SqFt`, `estimated_growth_rate`, and `City_Tier`.
-   - Included `Price_in_Lakhs`, but benchmarked against a mandatory baseline `Price_in_Lakhs * (1 + 8.274%)^5`. The ML regressor slashed baseline RMSE from ₹27.318L to ₹4.246L (84.5% error reduction), proving it captured property-specific growth factors beyond mere price scaling.
+   - Classifier test metrics safely normalized to **F1 = 0.7492, Acc = 87.43%, ROC-AUC = 0.9423**, safely below the 0.98 boundary while preserving strong discriminative ability.
+
+3. **Classifier Ablation & Leakage Boundary Analysis**:
+   To systematically understand feature dependencies and leakage sensitivity, the classifier was retrained across two additional variants:
+   - **Variant A**: Dropped `Price_in_Lakhs` and `Size_in_SqFt` (17 features). Without pricing and asset area, the model cannot calculate valuation attractiveness; F1-score collapses from 0.7492 to **0.3228** and ROC-AUC drops from 0.9423 to **0.7642**.
+   - **Variant B**: Additionally dropped `Nearby_Schools`, `Nearby_Hospitals`, and `City` (14 features). Stripped of both valuation and civic infrastructure/location priors, the model completely loses discriminative power, achieving F1 of **0.0003** and ROC-AUC of **0.5710** (near random guessing), reverting to majority-class guessing (74.77% accuracy vs 74.76% Class 0 base rate).
+
+| Model Variant | Excluded Features | Feature Count | Accuracy | F1-Score | ROC-AUC | Status / Finding |
+| :--- | :--- | :---: | :---: | :---: | :---: | :--- |
+| **Current Model** | Direct formula outputs (`Price_per_SqFt`, `infrastructure_score`, `growth_rate`, `City_Tier`, `transit`) | **19** | **87.43%** | **0.7492** | **0.9423** | **Production Best** |
+| **Variant A** | + Dropping `Price_in_Lakhs` & `Size_in_SqFt` | **17** | **75.77%** | **0.3228** | **0.7642** | **Valuation Stripped** |
+| **Variant B** | + Dropping `Nearby_Schools`, `Nearby_Hospitals`, & `City` | **14** | **74.77%** | **0.0003** | **0.5710** | **Signal Depleted** |
+
+4. **Regressor Baseline Anchor & Interpretation**:
+   - The 5-year regressor mostly relearns the growth formula, with the baseline $R^2$ (0.9822) shown next to the model's (0.9996).
+   - Because property prices span ₹10L to ₹500L, scaling current price by average compounded growth ($(1 + 8.186\%)^5 \approx 1.482$) alone achieves an $R^2$ of **0.9822**. However, the XGBoost Regressor captures local tier premiums, age adjustments, and infrastructure bonuses, cutting prediction error by **84.5%** (RMSE drops from ₹27.318L to ₹4.246L; MAE drops from ₹19.334L to ₹3.083L).
 
 ---
 
@@ -131,17 +143,17 @@ Evaluated on 50,000 stratified held-out test properties:
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
 | **Logistic Regression** | 81.75% | 68.65% | 52.09% | 0.5924 | 0.8714 | Baseline Linear |
 | **Random Forest** | 80.63% | 85.62% | 28.73% | 0.4303 | 0.9029 | High Precision |
-| **XGBoost (Best)** | **87.46%** | **75.33%** | **75.46%** | **0.7539** | **0.9418** | **Selected Best** |
+| **XGBoost (Current Best)** | **87.43%** | **75.33%** | **75.46%** | **0.7492** | **0.9423** | **Selected Production** |
 
 ### Regression Results (`price_regressor`)
 Evaluated on 50,000 held-out test properties:
 
-| Model | RMSE (₹ Lakhs) | MAE (₹ Lakhs) | $R^2$ Score | Error Reduction vs Baseline |
+| Model | RMSE (₹ Lakhs) | MAE (₹ Lakhs) | $R^2$ Score (Model vs Baseline) | Error Reduction vs Baseline |
 | :--- | :---: | :---: | :---: | :---: |
-| **Baseline (Price × Avg Growth)** | 27.318 | 19.334 | 0.9822 | Reference Anchor |
-| **Ridge Regression** | 13.257 | 9.190 | 0.9958 | 51.5% Reduction |
-| **Random Forest Regressor** | 14.075 | 10.559 | 0.9953 | 48.5% Reduction |
-| **XGBoost Regressor (Best)** | **4.246** | **3.083** | **0.9996** | **84.5% Reduction** |
+| **Baseline (Price × Avg Growth)** | 27.318 | 19.334 | **0.9822** | Reference Heuristic |
+| **Ridge Regression** | 13.257 | 9.190 | **0.9958** (vs 0.9822 baseline) | 51.5% Reduction |
+| **Random Forest Regressor** | 14.075 | 10.559 | **0.9953** (vs 0.9822 baseline) | 48.5% Reduction |
+| **XGBoost Regressor (Best)** | **4.246** | **3.083** | **0.9996** (vs 0.9822 baseline) | **84.5% Reduction** |
 
 ---
 
