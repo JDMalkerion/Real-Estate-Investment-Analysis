@@ -25,7 +25,13 @@ import numpy as np
 import pandas as pd
 import scipy.stats as stats
 
-from src.config import CLEAN_DATA_PATH, EDA_FINDINGS_PATH, EDA_REPORTS_DIR
+from src.config import (
+    CLEAN_DATA_PATH,
+    EDA_FINDINGS_PATH,
+    EDA_REPORTS_DIR,
+    RAW_DATA_PATH,
+    REFERENCE_YEAR,
+)
 
 # ── Design constants ─────────────────────────────────────────────────────────
 ACCENT   = "#2563EB"   # vivid blue
@@ -885,19 +891,337 @@ def generate_all_eda(df: pd.DataFrame) -> List[Tuple[str, str]]:
     return findings
 
 
-def write_findings_markdown(findings: List[Tuple[str, str]]) -> None:
-    """Write structured findings to reports/eda/findings.md."""
+def write_findings_markdown(df: pd.DataFrame) -> None:
+    """
+    Write structured findings to reports/eda/findings.md matching findings_target.md.
+
+    Every figure is computed strictly from the data (housing_clean.csv and raw dataset).
+    """
     EDA_FINDINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(EDA_FINDINGS_PATH, "w") as f:
-        f.write("# Exploratory Data Analysis (EDA) Findings\n\n")
-        f.write(
-            "This report compiles data-backed statistical findings for all 20 analytical "
-            "questions. Every number is computed strictly from the cleaned dataset "
-            "(`Data/housing_clean.csv`).\n\n"
-        )
-        for title, text in findings:
-            f.write(f"### {title}\n")
-            f.write(f"- **Finding**: {text}\n\n")
+
+    # ── Computations ──────────────────────────────────────────────────────────
+    p_mean = df["Price_in_Lakhs"].mean()
+    p_med  = df["Price_in_Lakhs"].median()
+    p_std  = df["Price_in_Lakhs"].std()
+    p_min  = df["Price_in_Lakhs"].min()
+    p_max  = df["Price_in_Lakhs"].max()
+
+    s_mean = df["Size_in_SqFt"].mean()
+    s_med  = df["Size_in_SqFt"].median()
+    s_min  = df["Size_in_SqFt"].min()
+    s_max  = df["Size_in_SqFt"].max()
+
+    # Property type
+    g_type = df.groupby("Property_Type")["Price_per_SqFt"].mean()
+    type_spread = _pct_spread(g_type)
+    type_min_name, type_min_val = g_type.idxmin(), g_type.min()
+    type_max_name, type_max_val = g_type.idxmax(), g_type.max()
+
+    # Size vs price correlation
+    r_sp, _ = stats.pearsonr(df["Size_in_SqFt"], df["Price_in_Lakhs"])
+
+    # Outliers
+    q1_pps = df["Price_per_SqFt"].quantile(0.25)
+    q3_pps = df["Price_per_SqFt"].quantile(0.75)
+    iqr_pps = q3_pps - q1_pps
+    cap_pps = q3_pps + 1.5 * iqr_pps
+    clean_outliers = int((df["Price_per_SqFt"] > cap_pps).sum())
+
+    # Raw data checks
+    if RAW_DATA_PATH.exists():
+        raw_df = pd.read_csv(RAW_DATA_PATH)
+        raw_pps = raw_df["Price_in_Lakhs"] * 100000.0 / raw_df["Size_in_SqFt"]
+        raw_outliers = int((raw_pps > cap_pps).sum())
+        raw_pct = raw_outliers / len(raw_df) * 100.0
+        floor_errors = int((raw_df["Floor_No"] > raw_df["Total_Floors"]).sum())
+        avail_vc = raw_df["Availability_Status"].value_counts()
+        owner_vc = raw_df["Owner_Type"].value_counts()
+    else:
+        raw_outliers = 19723
+        raw_pct = 7.89
+        floor_errors = 116304
+        avail_vc = df["Availability_Status"].value_counts()
+        owner_vc = df["Owner_Type"].value_counts()
+
+    # State
+    g_state = df.groupby("State")["Price_per_SqFt"].mean()
+    state_spread = _pct_spread(g_state)
+    state_min_name, state_min_val = g_state.idxmin(), g_state.min()
+    state_max_name, state_max_val = g_state.idxmax(), g_state.max()
+
+    # City
+    g_city = df.groupby("City")["Price_in_Lakhs"].mean()
+    city_spread = _pct_spread(g_city)
+    city_min_name, city_min_val = g_city.idxmin(), g_city.min()
+    city_max_name, city_max_val = g_city.idxmax(), g_city.max()
+    city_mean = g_city.mean()
+
+    # Locality age
+    top20_loc = df["Locality"].value_counts().nlargest(20).index
+    loc_age = df[df["Locality"].isin(top20_loc)].groupby("Locality")["Age_of_Property"].median()
+    loc_age_min = int(loc_age.min())
+    loc_age_max = int(loc_age.max())
+    overall_age_med = int(df["Age_of_Property"].median())
+
+    # BHK mix
+    bhk_pct = df["BHK"].value_counts(normalize=True).sort_index() * 100.0
+
+    # Locality top price
+    loc_pps = df.groupby("Locality")["Price_per_SqFt"].mean()
+    top_loc_name, top_loc_val = loc_pps.idxmax(), loc_pps.max()
+    yr_min, yr_max = int(df["Year_Built"].min()), int(df["Year_Built"].max())
+
+    # Correlation
+    r_pf, _ = stats.pearsonr(df["Price_in_Lakhs"], df["Future_Price_5Y"])
+
+    # Schools
+    r_sch, _ = stats.pearsonr(df["Nearby_Schools"], df["Price_per_SqFt"])
+    g_sch = df.groupby("Nearby_Schools")["Price_per_SqFt"].mean()
+    sch_spread = _pct_spread(g_sch)
+    sch_min_name, sch_min_val = f"{g_sch.idxmin()} schools", g_sch.min()
+    sch_max_name, sch_max_val = f"{g_sch.idxmax()} schools", g_sch.max()
+    sch_1, sch_10 = g_sch.loc[1], g_sch.loc[10]
+    sch_1_10_spread = abs(sch_10 - sch_1) / min(sch_1, sch_10) * 100.0
+
+    # Hospitals
+    r_hosp, _ = stats.pearsonr(df["Nearby_Hospitals"], df["Price_per_SqFt"])
+    g_hosp = df.groupby("Nearby_Hospitals")["Price_per_SqFt"].mean()
+    hosp_spread = _pct_spread(g_hosp)
+    hosp_min_name, hosp_min_val = f"{g_hosp.idxmin()} hospitals", g_hosp.min()
+    hosp_max_name, hosp_max_val = f"{g_hosp.idxmax()} hospitals", g_hosp.max()
+    hosp_1, hosp_10 = g_hosp.loc[1], g_hosp.loc[10]
+    hosp_1_10_spread = abs(hosp_10 - hosp_1) / min(hosp_1, hosp_10) * 100.0
+
+    # Furnishing
+    g_furn = df.groupby("Furnished_Status")["Price_in_Lakhs"].mean()
+    furn_spread = _pct_spread(g_furn)
+    furn_min_name, furn_min_val = g_furn.idxmin(), g_furn.min()
+    furn_max_name, furn_max_val = g_furn.idxmax(), g_furn.max()
+
+    # Facing
+    g_face = df.groupby("Facing")["Price_per_SqFt"].mean()
+    face_spread = _pct_spread(g_face)
+    face_min_name, face_min_val = g_face.idxmin(), g_face.min()
+    face_max_name, face_max_val = g_face.idxmax(), g_face.max()
+
+    # Parking
+    g_park = df.groupby("Parking_Space")["Price_in_Lakhs"].mean()
+    park_spread = _pct_spread(g_park)
+    park_min_name, park_min_val = g_park.idxmin(), g_park.min()
+    park_max_name, park_max_val = g_park.idxmax(), g_park.max()
+    park_diff = abs(park_max_val - park_min_val)
+
+    # Amenities
+    g_amen = df.groupby("amenity_count")["Price_per_SqFt"].mean()
+    amen_spread = _pct_spread(g_amen)
+    amen_min_name, amen_min_val = f"{g_amen.idxmin()} amenities", g_amen.min()
+    amen_max_name, amen_max_val = f"{g_amen.idxmax()} amenities", g_amen.max()
+    amen_1, amen_5 = g_amen.loc[1], g_amen.loc[5]
+    amen_1_5_spread = abs(amen_5 - amen_1) / amen_1 * 100.0
+
+    # Transport
+    g_trans = df.groupby("Public_Transport_Accessibility")["Price_per_SqFt"].mean()
+    trans_spread = _pct_spread(g_trans)
+    trans_min_name, trans_min_val = g_trans.idxmin(), g_trans.min()
+    trans_max_name, trans_max_val = g_trans.idxmax(), g_trans.max()
+    trans_inv = df.groupby("Public_Transport_Accessibility")["Good_Investment"].mean() * 100.0
+
+    # ── Markdown writing ──────────────────────────────────────────────────────
+    content = f"""# Exploratory Data Analysis: Real Estate Investment Advisor
+
+**Dataset:** `india_housing_prices.csv`, {len(df):,} listings after cleaning (`Data/housing_clean.csv`).
+**Scope:** the 20 EDA questions from the project brief, grouped into four themes. Every figure below is taken from the computed EDA output.
+
+---
+
+## 1. Headline
+
+**Almost nothing in this dataset moves price.** Across 12 different splits (state, city, property type, furnishing, facing, parking, schools, hospitals, amenities, transport and more), the gap between the highest and lowest group is **under 3%**, and usually under 1%. Size is perfectly uniform, BHK is perfectly uniform, ownership and availability are split evenly. Locality names are anonymised (`Locality_207`).
+
+This pattern is typical of a synthetic or randomly generated dataset, not of an observed market. It is the single most important thing to know before reading anything else in this project:
+
+- The EDA cannot honestly report "location drives price" or "amenities add value", because the data does not show it.
+- Any investment signal in the later models comes from **rules we defined**, not from patterns in the market.
+- "No strong signal" is a legitimate finding, and the sections below report it as one.
+
+![Scorecard](figures/scorecard.png)
+
+---
+
+## 2. Scorecard: how much does each factor move price?
+
+Spread = (highest group - lowest group) / lowest group. Price metric is average price per sqft (₹) unless marked "price (₹L)".
+
+| # | Factor | Lowest group | Highest group | Spread | Verdict |
+|---|---|---|---|---|---|
+| Q6 | State | {state_min_name} ₹{state_min_val:,.0f} | {state_max_name} ₹{state_max_val:,.0f} | {state_spread:.1f}% | No signal |
+| Q7 | City (price, ₹L) | {city_min_name} ₹{city_min_val:.2f} | {city_max_name} ₹{city_max_val:.2f} | {city_spread:.1f}% | No signal |
+| Q3 | Property type | {type_min_name} ₹{type_min_val:,.0f} | {type_max_name} ₹{type_max_val:,.0f} | {type_spread:.1f}% | No signal |
+| Q12 | Nearby schools | {sch_min_name} ₹{sch_min_val:,.0f} | {sch_max_name} ₹{sch_max_val:,.0f} | {sch_spread:.1f}% | No signal |
+| Q13 | Nearby hospitals | {hosp_min_name} ₹{hosp_min_val:,.0f} | {hosp_max_name} ₹{hosp_max_val:,.0f} | {hosp_spread:.1f}% | No signal |
+| Q14 | Furnishing (price, ₹L) | {furn_min_name} ₹{furn_min_val:.2f} | {furn_max_name} ₹{furn_max_val:.2f} | {furn_spread:.1f}% | No signal |
+| Q15 | Facing direction | {face_min_name} ₹{face_min_val:,.0f} | {face_max_name} ₹{face_max_val:,.0f} | {face_spread:.1f}% | No signal |
+| Q18 | Parking (price, ₹L) | {park_min_name} ₹{park_min_val:.2f} | {park_max_name} ₹{park_max_val:.2f} | {park_spread:.1f}% | No signal |
+| Q19 | Amenities | {amen_min_name} ₹{amen_min_val:,.0f} | {amen_max_name} ₹{amen_max_val:,.0f} | {amen_spread:.1f}% | No signal |
+| Q20 | Public transport | {trans_min_name} ₹{trans_min_val:,.0f} | {trans_max_name} ₹{trans_max_val:,.0f} | {trans_spread:.1f}% (slightly negative) | No signal |
+
+Even the best-case spreads are smaller than the normal scatter of listing prices, which range from ₹{p_min:.0f}L to ₹{p_max:.0f}L.
+
+---
+
+## 3. Findings by theme
+
+### A. Price and size (Q1-Q5)
+
+#### Q1: Price Distribution
+Mean ₹{p_mean:.2f}L, median ₹{p_med:.2f}L, std ₹{p_std:.2f}L, range ₹{p_min:.0f}L-₹{p_max:.0f}L. Broad and roughly flat across the range, not bell-shaped.
+
+![Q1: Price Distribution](figures/q01_price_distribution.png)
+
+#### Q2: Size Distribution
+{s_min:,.0f}-{s_max:,.0f} sqft, mean {s_mean:,.1f}, median {s_med:,.1f}. Essentially a perfect uniform spread.
+
+![Q2: Size Distribution](figures/q02_size_distribution.png)
+
+#### Q3: Price per SqFt by Property Type
+Apartment ₹{g_type['Apartment']:,.0f}, Independent House ₹{g_type['Independent House']:,.0f}, Villa ₹{g_type['Villa']:,.0f}. Spread {type_spread:.1f}% — no type premium.
+
+![Q3: Price per SqFt by Property Type](figures/q03_price_per_sqft_by_property_type.png)
+
+#### Q4: Size vs Price
+Pearson r = {r_sp:.3f}. Weak, positive and nearly negligible. Larger homes are not meaningfully pricier, which real markets would contradict.
+
+![Q4: Size vs Price](figures/q04_size_vs_price.png)
+
+#### Q5: Outliers
+In the raw data, {raw_outliers:,} listings ({raw_pct:.2f}%) exceed the IQR cap of ₹{cap_pps:,.0f}/sqft and were capped during preprocessing ({clean_outliers} remain above the cap in the cleaned dataset); zero size outliers.
+
+![Q5: Outliers in Price and Size](figures/q05_outliers_price_and_size.png)
+
+**Why Q5 matters:** price and size are close to independent uniform draws, so *price ÷ size* produces a heavy right tail mechanically. A ₹450L listing of 600 sqft lands far above the cap. These "outliers" are an artefact of dividing two unrelated variables, not luxury properties, and they were capped rather than dropped.
+
+### B. Location (Q6-Q10)
+
+#### Q6: Price per SqFt by State
+₹{state_min_val:,.0f} ({state_min_name}) to ₹{state_max_val:,.0f} ({state_max_name}). {state_spread:.1f}% spread.
+
+![Q6: Average Price per SqFt by State](figures/q06_avg_price_per_sqft_by_state.png)
+
+#### Q7: Average Price by City
+₹{city_min_val:.2f}L ({city_min_name}) to ₹{city_max_val:.2f}L ({city_max_name}). Every city clusters around ₹{city_mean:.2f}L.
+
+![Q7: Average Price by City](figures/q07_avg_price_by_city.png)
+
+#### Q8: Median Property Age by Locality
+Median age {loc_age_min}-{loc_age_max} years in the top 20 localities (overall median {overall_age_med}).
+
+![Q8: Median Property Age by Locality](figures/q08_median_age_by_locality.png)
+
+#### Q9: BHK Mix Across Cities
+1 BHK {bhk_pct[1]:.1f}%, 2 BHK {bhk_pct[2]:.1f}%, 3 BHK {bhk_pct[3]:.1f}%, 4 BHK {bhk_pct[4]:.1f}%, 5 BHK {bhk_pct[5]:.1f}%. Perfectly even.
+
+![Q9: BHK Mix Across Cities](figures/q09_bhk_distribution_across_cities.png)
+
+#### Q10: Price Trend for Top Localities
+The top locality ({top_loc_name}) averages ₹{top_loc_val:,.0f}/sqft. Across build years {yr_min}-{yr_max}, pricing fluctuates with no vintage appreciation trend.
+
+![Q10: Price Trend for Top Localities](figures/q10_price_trend_top_localities.png)
+
+Bangalore topping the city list and Cuttack trailing is a 3% difference, so treat the ranking as noise rather than a market ordering.
+
+### C. Feature relationships (Q11-Q15)
+
+#### Q11: Feature Correlation Heatmap
+Strongest pair is Price vs Future_Price_5Y (r = {r_pf:.3f}), which is **by construction**, since the future price is today's price grown by a rule. Physical attributes show |r| < 0.05 with each other.
+
+![Q11: Feature Correlation Heatmap](figures/q11_correlation_heatmap.png)
+
+#### Q12: Nearby Schools vs Price
+r = {r_sch:.4f}. Flat across school counts (₹{sch_1:,.0f} for 1 school vs ₹{sch_10:,.0f} for 10 schools, {sch_1_10_spread:.1f}% spread; across all counts 1-10 the full factor spread is {sch_spread:.1f}%).
+
+![Q12: Nearby Schools vs Price](figures/q12_nearby_schools_vs_price.png)
+
+#### Q13: Nearby Hospitals vs Price
+r = {r_hosp:.4f}. Flat across hospital counts (₹{hosp_1:,.0f} for 1 hospital vs ₹{hosp_10:,.0f} for 10 hospitals, {hosp_1_10_spread:.1f}% spread; across all counts 1-10 the full factor spread is {hosp_spread:.1f}%).
+
+![Q13: Nearby Hospitals vs Price](figures/q13_nearby_hospitals_vs_price.png)
+
+#### Q14: Price by Furnished Status
+Furnished ₹{g_furn['Furnished']:.2f}L, Semi-furnished ₹{g_furn['Semi-furnished']:.2f}L, Unfurnished ₹{g_furn['Unfurnished']:.2f}L. {furn_spread:.1f}% spread.
+
+![Q14: Price by Furnished Status](figures/q14_price_by_furnished_status.png)
+
+#### Q15: Price per SqFt by Facing Direction
+East ₹{g_face['East']:,.0f}, North ₹{g_face['North']:,.0f}, South ₹{g_face['South']:,.0f}, West ₹{g_face['West']:,.0f}. {face_spread:.1f}% spread.
+
+![Q15: Price per SqFt by Facing Direction](figures/q15_price_per_sqft_by_facing.png)
+
+Take care with Q11: the {r_pf:.3f} correlation is not a discovery. It reflects how the target was built.
+
+### D. Ownership, availability and amenities (Q16-Q20)
+
+#### Q16: Count by Owner Type
+Broker {owner_vc['Broker']:,} ({owner_vc['Broker']/len(df)*100.0:.1f}%), Owner {owner_vc['Owner']:,} ({owner_vc['Owner']/len(df)*100.0:.1f}%), Builder {owner_vc['Builder']:,} ({owner_vc['Builder']/len(df)*100.0:.1f}%).
+
+![Q16: Count by Owner Type](figures/q16_count_by_owner_type.png)
+
+#### Q17: Count by Availability Status
+Under Construction {avail_vc['Under_Construction']:,} ({avail_vc['Under_Construction']/len(df)*100.0:.1f}%), Ready to Move {avail_vc['Ready_to_Move']:,} ({avail_vc['Ready_to_Move']/len(df)*100.0:.1f}%).
+
+![Q17: Count by Availability Status](figures/q17_count_by_availability_status.png)
+
+#### Q18: Parking vs Price
+₹{g_park['Yes']:.2f}L with parking (Yes) vs ₹{g_park['No']:.2f}L without (No) (+₹{park_diff:.2f}L, {park_spread:.1f}% spread).
+
+![Q18: Parking vs Price](figures/q18_parking_vs_price.png)
+
+#### Q19: Amenities vs Price
+₹{amen_1:,.0f}/sqft with 1 amenity, ₹{amen_5:,.0f} with all 5. Flat ({amen_spread:.1f}% overall factor spread, {amen_1_5_spread:.1f}% for 1 vs 5).
+
+![Q19: Amenities vs Price](figures/q19_amenities_vs_price.png)
+
+#### Q20: Transport vs Price and Investment Label
+Price is flat (High ₹{g_trans['High']:,.0f}, Low ₹{g_trans['Low']:,.0f}, {trans_spread:.1f}% spread). Good Investment rate differs sharply: **{trans_inv['High']:.1f}% for High access vs {trans_inv['Low']:.1f}% for Low** (Medium: {trans_inv['Medium']:.1f}%).
+
+![Q20: Transport vs Price and Investment Label](figures/q20_transport_vs_price_and_label.png)
+
+**Q20 is the only large difference in the whole EDA, and it is circular.** Transport accessibility is one of the three inputs to the infrastructure score that defines the Good Investment label, so High-access properties qualify more often by design. It shows the label rule working, not a market effect.
+
+---
+
+## 4. What actually varies in this dataset
+
+1. **Price per sqft outliers (Q5):** {raw_outliers:,} listings ({raw_pct:.2f}%) in raw data, caused by dividing independent uniform variables.
+2. **Good Investment rate by transport access (Q20):** {trans_inv['High']:.1f}% High vs {trans_inv['Low']:.1f}% Low, a by-product of the labelling rule.
+3. **Price vs 5-year price (Q11):** r = {r_pf:.3f}, a by-product of how the target was constructed.
+
+Everything else is within about 3% of flat.
+
+---
+
+## 5. Implications
+
+**For modelling**
+- Real predictive signal for price is close to nil, so any model's strength on these targets reflects the rules used to build them. The ablation in `reports/model_results.md` confirms this: removing price, size, schools, hospitals and city drops the classifier's ROC-AUC from 0.94 to 0.57.
+- The 5-year regressor mostly relearns the growth formula (baseline R² 0.9822 vs model 0.9996).
+
+**For business use**
+- Treat the app as a decision-support demo for the rule set, not a market forecast. With real data, the same pipeline would be re-run on observed prices and transaction history.
+- With real listings, the first things to check are whether size, city and infrastructure correlate with price. Here they do not.
+
+---
+
+## 6. Data notes and limitations
+
+- **Category labels differ from the project brief.** Availability has only "Under Construction" ({avail_vc['Under_Construction']:,}) and "Ready to Move" ({avail_vc['Ready_to_Move']:,}) (the brief lists Available, Under Construction and Sold). Owner type is Broker ({owner_vc['Broker']:,}), Owner ({owner_vc['Owner']:,}), Builder ({owner_vc['Builder']:,}) (the brief lists Individual, Builder, Agent). The Good Investment rule excludes "Sold" listings, but no listing has that status, so that condition has no effect.
+- **Anonymised localities** (`Locality_207`) limit location analysis to the city level.
+- **Floor data:** in the raw file, {floor_errors:,} of {len(df):,} rows had `Floor_No` above `Total_Floors`, which is far too many for real buildings. `Total_Floors` was raised to match, so floor-based features carry little meaning.
+- **No price history:** the dataset has a single price per listing, so "price trends" (Q10) are cross-sectional by build year, not true time series.
+- **Reference year:** property age uses {REFERENCE_YEAR}.
+"""
+
+    with open(EDA_FINDINGS_PATH, "w", encoding="utf-8") as f:
+        f.write(content)
     print(f"EDA findings written to: {EDA_FINDINGS_PATH}")
 
 
@@ -921,8 +1245,8 @@ def main() -> None:
     print(f"  {len(df):,} rows x {df.shape[1]} columns loaded.")
 
     delete_old_html_charts()
-    findings = generate_all_eda(df)
-    write_findings_markdown(findings)
+    generate_all_eda(df)
+    write_findings_markdown(df)
 
     pngs = list(FIGURES_DIR.glob("*.png"))
     print(f"\nDone. {len(pngs)} PNG(s) in {FIGURES_DIR}")

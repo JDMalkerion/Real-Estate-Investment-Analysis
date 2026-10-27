@@ -159,16 +159,37 @@ Evaluated on 50,000 held-out test properties:
 
 ## Insights
 
-The following 8 key findings were computed directly from code on the dataset (`Data/housing_clean.csv`):
+### Headline: Almost Nothing in This Dataset Moves Price
 
-1. **City Price per SqFt Clustering (No Strong Geographical Disparity)**: Average property price per square foot across Indian cities is tightly clustered around ₹11,814/SqFt (median ₹9,245/SqFt). Mangalore averages highest at ₹12,031/SqFt, followed by Surat (₹12,029/SqFt) and Pune (₹11,998/SqFt), while Trivandrum is lowest at ₹11,588/SqFt. Across 20 states, averages span only ₹11,727/SqFt (Rajasthan) to ₹11,951/SqFt (Karnataka), indicating no strong signal of statewide pricing divergence in this dataset.
-2. **Property Type Pricing Neutrality (No Strong Signal)**: Mean price per square foot is virtually identical across asset classes: Apartments average ₹11,810/SqFt, Independent Houses ₹11,857/SqFt, and Villas ₹11,776/SqFt. No property type commands an inherent raw pricing premium.
-3. **Public Transit Accessibility Strongly Drives Investment Qualification**: While transport accessibility shows near-zero correlation with spot price (High access averages ₹11,785/SqFt vs Low access ₹11,842/SqFt), it drastically alters investment attractiveness: **42.8%** of High transit properties qualify as Good Investments compared to only **7.4%** of Low transit properties due to civic infrastructure score weighting.
-4. **Primary Drivers of the Good Investment Classifier**: In the trained XGBoost classifier, the top predictive features are `Price_in_Lakhs` (importance: 0.174), `Size_in_SqFt` (0.165), `Total_Floors` (0.076), and `floor_ratio` (0.068), reflecting that the model successfully learns to identify properties positioned at competitive price-to-size ratios relative to local building elevations.
-5. **Primary Drivers of 5-Year Price Regressor**: In the XGBoost Regressor, `Price_in_Lakhs` dominates base valuation (importance: 0.782), while `infrastructure_score` (0.064) and `Age_of_Property` (0.041) govern property-specific growth deviations, enabling the model to outperform the average growth baseline by 84.5%.
-6. **Civic Amenities and Parking Space Pricing (No Strong Signal)**: Properties with dedicated parking average ₹245.93 Lakhs vs ₹245.55 Lakhs without parking (an insignificant difference of ₹0.38 Lakhs). Similarly, properties with 1 amenity average ₹11,803/SqFt while properties with all 5 amenities average ₹11,854/SqFt, demonstrating no strong signal of amenity-driven price premiums.
-7. **School and Healthcare Proximity Pricing (No Strong Signal)**: Correlations between nearby schools and price per sqft (Pearson $r = -0.0019$) and nearby hospitals ($r = -0.0004$) are essentially zero. Average price per sqft remains flat from 1 school (₹11,841/SqFt) to 10 schools (₹11,794/SqFt).
-8. **Right-Skewed Price per SqFt Outliers**: While unit sizes are uniformly bounded between 500 and 5,000 SqFt (0 outliers beyond IQR limits), price per sqft exhibited substantial upper-tail skew, with 19,723 properties (7.89%) flagged and capped at the IQR upper fence of ₹32,764/SqFt.
+**Almost nothing in this dataset moves price.** Across 12 different splits (state, city, property type, furnishing, facing, parking, schools, hospitals, amenities, transport and more), the gap between the highest and lowest group is **under 3%**, and usually under 1%. Size is perfectly uniform, BHK is perfectly uniform, and ownership and availability are split evenly. Locality names are anonymised (`Locality_207`).
+
+This pattern is typical of a synthetic or randomly generated dataset, not of an observed market:
+- The EDA cannot honestly report "location drives price" or "amenities add value", because the data does not show it.
+- Any investment signal in the downstream models comes from **rules we defined**, not from patterns in the market.
+- "No strong signal" is a legitimate empirical finding.
+
+![Scorecard](reports/eda/figures/scorecard.png)
+
+### Factor Scorecard: How Much Does Each Factor Move Price?
+
+Spread = (highest group - lowest group) / lowest group. Price metric is average price per sqft (₹) unless marked "price (₹L)".
+
+| # | Factor | Lowest group | Highest group | Spread | Verdict |
+|---|---|---|---|---|---|
+| Q6 | State | Rajasthan ₹11,727 | Karnataka ₹11,951 | 1.9% | No signal |
+| Q7 | City (price, ₹L) | Cuttack ₹242.22 | Bangalore ₹249.51 | 3.0% | No signal |
+| Q3 | Property type | Villa ₹11,776 | Independent House ₹11,857 | 0.7% | No signal |
+| Q12 | Nearby schools | 8 schools ₹11,707 | 6 schools ₹11,920 | 1.8% | No signal |
+| Q13 | Nearby hospitals | 10 hospitals ₹11,702 | 7 hospitals ₹11,964 | 2.2% | No signal |
+| Q14 | Furnishing (price, ₹L) | Semi-furnished ₹245.22 | Unfurnished ₹246.26 | 0.4% | No signal |
+| Q15 | Facing direction | South ₹11,790 | West ₹11,878 | 0.7% | No signal |
+| Q18 | Parking (price, ₹L) | No ₹245.55 | Yes ₹245.93 | 0.2% | No signal |
+| Q19 | Amenities | 3 amenities ₹11,793 | 5 amenities ₹11,854 | 0.5% | No signal |
+| Q20 | Public transport | High ₹11,785 | Low ₹11,842 | 0.5% | No signal |
+
+Even the best-case spreads are smaller than the normal scatter of listing prices, which range from ₹10L to ₹500L.
+
+For the complete 20-question analysis, chart embeds, and data limitations, see the full report in [reports/eda/findings.md](reports/eda/findings.md).
 
 ---
 
@@ -188,13 +209,13 @@ For any property listing entered or explored, the tool provides two complementar
 2. **5-Year Valuation Forecast & Implied CAGR**: Projected market value 5 years into the future, comparing spot price against forecasted price and reporting the annualized growth rate (CAGR).
 
 ### Concrete Data-Backed Recommendations
-1. **Prioritize High Transit Accessibility Corridors**: Properties located in areas with High Public Transport Accessibility qualify for Good Investment status at a rate of **42.8%**, compared to only **7.4%** for Low accessibility areas. High connectivity remains the strongest single catalyst for infrastructure-backed capital appreciation.
-2. **Exploit Type-Neutral Pricing Inefficiencies**: Because Apartments (₹11,810/SqFt), Independent Houses (₹11,857/SqFt), and Villas (₹11,776/SqFt) currently trade at near-identical average rates per square foot, investors should target Independent Houses, which capture higher long-term land appreciation adjustments without demanding an upfront spot pricing premium.
-3. **Avoid Paying Excessive Premiums for Superfluous Amenities**: Amenities (pools, clubhouses, gyms) and parking spaces show negligible correlation with baseline price (₹11,803/SqFt for 1 amenity vs ₹11,854/SqFt for 5 amenities; ₹245.93L with parking vs ₹245.55L without). Investors should not pay steep markups for luxury cosmetic features that fail to translate into superior valuation gains.
-4. **Target Sub-30k/SqFt Properties in High-Tier Metros**: 19,723 properties in the dataset exceeded the upper IQR threshold (₹32,764/SqFt). Buying below city median price per sqft (median ₹9,245/SqFt) in Tier 1 cities ensures a built-in margin of safety.
+1. **Public Transit Accessibility Reflects the Label Rule (Not Market Price)**: Properties located in areas with High Public Transport Accessibility qualify for Good Investment status at **42.5%**, compared to only **7.3%** for Low accessibility areas. This contrast does not reflect organic market pricing (spot price is flat at ₹11,785/SqFt High vs ₹11,842/SqFt Low), but is circular: transport accessibility is an explicit input into the defined infrastructure score rule that qualifies properties.
+2. **Type-Neutral Pricing in Dataset**: Apartments (₹11,810/SqFt), Independent Houses (₹11,857/SqFt), and Villas (₹11,776/SqFt) trade at essentially identical average rates per square foot (0.7% spread). Any relative preference for Independent Houses stems from domain appreciation assumptions (+1.5% adjustment in the growth rule), not from an observed market price discount.
+3. **Amenities and Parking Carry Negligible Market Premium**: Dedicated parking adds only ₹0.38L on average (₹245.93L with parking vs ₹245.55L without, a 0.2% spread). Properties with 1 amenity average ₹11,803/SqFt vs ₹11,854/SqFt for 5 amenities (0.5% spread). In this dataset, cosmetic and convenience amenities command no measurable market premium.
+4. **Rule-Based Valuation Hurdle**: Because the underlying data exhibits near-zero organic pricing signal across physical features, the Good Investment label reflects adherence to screening thresholds (sub-55th percentile price/sqft for the city, top 50% infrastructure score, and synthesized growth rate $r \ge 7.0\%$). Model outputs reflect how well listings align with these rules rather than discovering hidden real-world market patterns.
 
 ### Limitations and Caveats
-This system serves as an analytical decision aid and does **not constitute financial, legal, or investment advice**. Because the underlying dataset lacks historical repeat-sales transaction histories, all future price projections and investment verdicts are derived from economic growth assumptions and multi-criteria screening rules rather than observed capital gains. Investors must conduct independent due diligence, structural property inspections, and legal title verifications prior to executing transactions.
+This system serves as an analytical decision aid and does **not constitute financial, legal, or investment advice**. Because the underlying dataset contains synthetic characteristics with near-zero cross-sectional price variance across physical and geographic attributes, all future price projections and investment verdicts reflect **domain-defined heuristics and rules**, not observed real-world market dynamics. The data shows almost no market signal; models learn to approximate the predefined classification and valuation formulas. Investors must conduct independent due diligence, structural property inspections, and legal title verifications prior to executing transactions.
 
 ---
 
@@ -222,6 +243,7 @@ python3 verify_preprocess.py
 ### 3. Generate EDA Visualizations & Findings
 ```bash
 python3 src/eda.py
+python3 verify_eda.py
 ```
 
 ### 4. Construct Investment Targets
